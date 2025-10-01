@@ -1,54 +1,130 @@
+let email = '';
+let useCurrentAccount = true;
 
-chrome.identity.getProfileUserInfo(function(userInfo) { email = userInfo.email; });
+// Debug flag - set to false to disable logging in production
+const DEBUG = false;
 
-useCurrentAccount = true;
+// Debug logging helper
+function debugLog(message, ...args) {
+    if (DEBUG) {
+        console.log(`[UseMyCurrentAccount] ${message}`, ...args);
+    }
+}
 
-getState(function(state) {
-   updateIcon(state);
+function debugWarn(message, ...args) {
+    if (DEBUG) {
+        console.warn(`[UseMyCurrentAccount] ${message}`, ...args);
+    }
+}
+
+function debugError(message, ...args) {
+    // Always log errors, even in production
+    console.error(`[UseMyCurrentAccount] ${message}`, ...args);
+}
+
+// Function to get email with promise support
+async function getEmail() {
+    if (email) return email;
+    
+    try {
+        const userInfo = await chrome.identity.getProfileUserInfo();
+        if (userInfo && userInfo.email) {
+            email = userInfo.email;
+            debugLog('Email loaded:', email);
+            return email;
+        } else {
+            debugWarn('No email found in userInfo');
+            return '';
+        }
+    } catch (error) {
+        debugError('Error getting profile:', error);
+        return '';
+    }
+}
+
+// Initialize on service worker startup
+getEmail().then(() => {
+    getState(function(state) {
+        updateIcon(state);
+    });
 });
 
-chrome.webRequest.onBeforeRequest.addListener(function(details){
-   
-   if(useCurrentAccount === true ){
-      var url = new URL(details.url);        
+// Use declarativeNetRequest to redirect login URLs
+async function updateRedirectRules() {
+    const userEmail = await getEmail();
+    
+    if (!userEmail || !useCurrentAccount) {
+        // Remove all rules when disabled or no email
+        await chrome.declarativeNetRequest.updateDynamicRules({
+            removeRuleIds: [1, 2]
+        });
+        return;
+    }
 
-      var search = url.searchParams;
-      if(!search.has("login_hint") && !search.has("sid")){
-         search.append("login_hint", email);
-   
-         return { redirectUrl: url.toString()};
-      }
-   }    
-},
-{urls:["*://login.microsoftonline.com/*/authorize*"]},
-["blocking"]
-);
+    const domain = userEmail.split('@').pop();
+    
+    // Rule 1: Add login_hint parameter to /authorize URLs
+    const rule1 = {
+        id: 1,
+        priority: 1,
+        action: {
+            type: 'redirect',
+            redirect: {
+                transform: {
+                    queryTransform: {
+                        addOrReplaceParams: [
+                            { key: 'login_hint', value: userEmail }
+                        ]
+                    }
+                }
+            }
+        },
+        condition: {
+            urlFilter: '||login.microsoftonline.com/*/authorize',
+            resourceTypes: ['main_frame', 'sub_frame']
+        }
+    };
 
-chrome.webRequest.onBeforeRequest.addListener(function(details){
-   
-   if(useCurrentAccount === true ){
-      var url = new URL(details.url);        
+    // Rule 2: Add whr parameter to /saml2 and /wsfed URLs
+    const rule2 = {
+        id: 2,
+        priority: 1,
+        action: {
+            type: 'redirect',
+            redirect: {
+                transform: {
+                    queryTransform: {
+                        addOrReplaceParams: [
+                            { key: 'whr', value: domain }
+                        ]
+                    }
+                }
+            }
+        },
+        condition: {
+            regexFilter: '^https://login\\.microsoftonline\\.com/.*/(?:saml2|wsfed)',
+            resourceTypes: ['main_frame', 'sub_frame']
+        }
+    };
 
-      var search = url.searchParams;
-      if(!search.has("whr")) {
-
-         var domain = email.split('@').pop()
-         search.append("whr", domain);
-   
-         return { redirectUrl: url.toString()};
-      }
-   }    
-},
-{urls:["*://login.microsoftonline.com/*/saml2*",
-       "*://login.microsoftonline.com/*/wsfed*"]},
-["blocking"]
-);
+    try {
+        await chrome.declarativeNetRequest.updateDynamicRules({
+            removeRuleIds: [1, 2],
+            addRules: [rule1, rule2]
+        });
+        debugLog('Redirect rules updated successfully');
+    } catch (error) {
+        debugError('Error updating redirect rules:', error);
+    }
+}
 
 function setState(state){
    useCurrentAccount = state;
    chrome.storage.local.set({
       state: state
   });
+  // Update rules when state changes
+  updateRedirectRules();
 }
 
 function getState(callback) {
@@ -64,11 +140,14 @@ function getState(callback) {
    });
 }
 
-getState(function(state) {
-   updateIcon(state);
+// Update rules when extension loads
+getEmail().then(() => {
+    getState(function(state) {
+        updateRedirectRules();
+    });
 });
 
-chrome.browserAction.onClicked.addListener(function() {
+chrome.action.onClicked.addListener(function() {
    getState(function(state) {
        var newState = !state;
        updateIcon(newState);
@@ -79,11 +158,11 @@ chrome.browserAction.onClicked.addListener(function() {
 function updateIcon(state) {
    var color = [255, 0, 0, 255];
    var text = state ? '' : 'Off';
-   chrome.browserAction.setBadgeBackgroundColor({
+   chrome.action.setBadgeBackgroundColor({
        color: color
    });
 
-   chrome.browserAction.setBadgeText({
+   chrome.action.setBadgeText({
        text: text
    });
 }

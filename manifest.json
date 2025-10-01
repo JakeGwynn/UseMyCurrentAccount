@@ -1,14 +1,15 @@
 {
   "name": "Use My Current Account",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Use the browser's profile when signing into Microsoft sites.",
   "homepage_url": "https://github.com/novotnyllc/UseMyCurrentAccount",
   "permissions": [
     "identity",
     "identity.email",
     "storage",
-    "webRequest",
-    "webRequestBlocking",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
     "*://login.microsoftonline.com/*"
   ],
   "author": "Claire Novotny",
@@ -19,10 +20,9 @@
     "128": "icons/icon_128.png"
  },
   "background": {
-    "persistent":  true,
-    "scripts": [ "src/background.js" ]
+    "service_worker": "src/background.js"
   },
-  "browser_action": {
+  "action": {
     "default_icon": {
       "16": "icons/icon_16.png",
       "20": "icons/icon_20.png",
@@ -30,5 +30,5 @@
       "128": "icons/icon_128.png"
   }
 },
-  "manifest_version": 2
+  "manifest_version": 3
 }
