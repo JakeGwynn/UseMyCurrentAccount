@@ -31,7 +31,7 @@ async function getEmail() {
     
     try {
         debugLog('Requesting profile user info from identity API...');
-        const userInfo = await chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' });
+        const userInfo = await getProfileUserInfoSafe();
         debugLog('Profile userInfo received:', JSON.stringify(userInfo, null, 2));
         
         if (userInfo && userInfo.email) {
@@ -46,6 +46,36 @@ async function getEmail() {
         debugError('Error getting profile:', error);
         return '';
     }
+}
+
+function getProfileUserInfoSafe() {
+    // Edge/Chrome differences:
+    // - Some builds only support the callback signature.
+    // - Some builds don't support the optional details parameter.
+    return new Promise((resolve, reject) => {
+        try {
+            const fn = chrome?.identity?.getProfileUserInfo;
+            if (typeof fn !== 'function') {
+                resolve({ email: '' });
+                return;
+            }
+
+            const callback = (userInfo) => resolve(userInfo || { email: '' });
+
+            // Try with details (newer API) first; fall back to old signature.
+            try {
+                // Some implementations return a Promise if no callback is provided.
+                const maybePromise = fn({ accountStatus: 'ANY' }, callback);
+                if (maybePromise && typeof maybePromise.then === 'function') {
+                    maybePromise.then(resolve, reject);
+                }
+            } catch {
+                fn(callback);
+            }
+        } catch (e) {
+            reject(e);
+        }
+    });
 }
 
 // Initialize on service worker startup
@@ -168,6 +198,24 @@ getEmail().then(() => {
         debugLog('Calling updateRedirectRules on startup with state:', state);
         updateRedirectRules();
     });
+});
+
+// Ensure rules are (re)applied after install/update and browser start.
+chrome.runtime.onInstalled.addListener(() => {
+    debugLog('onInstalled fired');
+    getState(() => updateRedirectRules());
+});
+
+chrome.runtime.onStartup?.addListener?.(() => {
+    debugLog('onStartup fired');
+    getState(() => updateRedirectRules());
+});
+
+// If the signed-in profile account changes, refresh cached email and rules.
+chrome.identity?.onSignInChanged?.addListener?.(() => {
+    debugLog('onSignInChanged fired; clearing cached email');
+    email = '';
+    getState(() => updateRedirectRules());
 });
 
 chrome.action.onClicked.addListener(function() {
